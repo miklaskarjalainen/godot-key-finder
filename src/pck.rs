@@ -12,7 +12,10 @@ impl PckFile {
         }
     }
 
-    pub fn new_embedded(file_path: &str) -> PckFile {
+    /**
+     * @returns the PckFile stripped from the binary, and the index where the PCK begins in the binary.
+     */
+    pub fn new_embedded(file_path: &str) -> (PckFile, usize) {
         let mut pck = Self::new(file_path);
         pck.current_index = pck.bytes.len() - 4;
 
@@ -30,11 +33,13 @@ impl PckFile {
             assert_eq!(magic, 0x43504447, "not magic!");
             pck.current_index -= 4;
         }
+        
+        let begin_pck = pck.current_index;
+        pck.current_index = 0;
 
         let len = pck.bytes.len() - 4;
-        pck.bytes = pck.bytes.drain(pck.current_index..len).collect();
-        pck.current_index = 0;
-        pck
+        pck.bytes = pck.bytes.drain(begin_pck..len).collect();
+        (pck, begin_pck)
     }
 
     pub fn read_buffer(&mut self, buffer: &mut [u8], big_endian: bool) {
