@@ -12,6 +12,31 @@ impl PckFile {
         }
     }
 
+    pub fn new_embedded(file_path: &str) -> PckFile {
+        let mut pck = Self::new(file_path);
+        pck.current_index = pck.bytes.len() - 4;
+
+        {
+            let magic = pck.read_u32();
+            assert_eq!(magic, 0x43504447, "no pck found in binary!");
+        }
+
+        pck.current_index -= 12;
+        let ds = pck.read_u64();
+        pck.current_index -= (ds as usize) + 8;
+
+        {
+            let magic = pck.read_u32();
+            assert_eq!(magic, 0x43504447, "not magic!");
+            pck.current_index -= 4;
+        }
+
+        let len = pck.bytes.len() - 4;
+        pck.bytes = pck.bytes.drain(pck.current_index..len).collect();
+        pck.current_index = 0;
+        pck
+    }
+
     pub fn read_buffer(&mut self, buffer: &mut [u8], big_endian: bool) {
         let iter_with_endian = 0..buffer.len();
 
