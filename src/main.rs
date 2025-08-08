@@ -1,44 +1,118 @@
 use std::ops::Range;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::thread;
+use std::time::{Duration, Instant};
 
 mod pck;
 
-const THREAD_COUNT: usize = 1;
+const THREAD_COUNT: usize = 4;
+const UPDATE_INTERVAL: Duration = Duration::from_millis(500);
 
-fn brute_force(
-    ctx_arc: Arc<RwLock<pck::DecryptContext>>,
-    binary_arc: Arc<RwLock<Vec<u8>>>,
-    check_range: Range<usize>,
-) {
-    // Going through the indexes in reverse, it seems like the encryption key is at the end of the binary.
-    let bin = binary_arc.read().expect("?");
-    let ctx = ctx_arc.read().expect("?");
+struct WorkContext {
+    ctx: pck::DecryptContext,
+    binary_data: Vec<u8>,
+    binary_size: usize, // binary_data gets extra data appended to prevent going out-of-bounds.
 
-    let mut buffer = ctx.create_buffer();
+    iterations: AtomicU64,
+    done: AtomicBool,
+}
 
-    let range_len = check_range.len();
-    for (idx, offset) in check_range.rev().enumerate() {
-        let possible_key = &bin[offset..(offset + 32)];
+impl WorkContext {
+    pub fn new(pck_path: &str, binary_path: &str, embedded: bool) -> Arc<RwLock<Self>> {
+        let mut binary_data = std::fs::read(binary_path).expect("binary path is invalid!");
+        let binary_size: usize;
 
-        if ctx.try_decrypt(possible_key, &mut buffer) {
-            println!(
-                "KEY FOUND in {} ({:.2}%) iterations!\n The key is {:X?}",
-                idx,
-                (idx as f32) / (range_len as f32) * 100.0f32,
-                hex::encode(possible_key)
-            );
-            break;
+        let pck_file = if embedded {
+            let (f, s) = pck::PckFile::new_embedded(pck_path);
+            binary_size = s;
+            f
+        } else {
+            binary_size = binary_data.len();
+            pck::PckFile::new(pck_path)
+        };
+
+        // Bit of a hack to make sure that we don't go out of bounds, this way no if statement is needed in the for loop.
+        binary_data.resize(binary_size + 32, 0u8);
+
+        let ctx = pck::DecryptContext::from(pck_file);
+
+        Arc::new(RwLock::new(Self {
+            ctx,
+            binary_data,
+            binary_size,
+
+            iterations: AtomicU64::new(0),
+            done: AtomicBool::new(false),
+        }))
+    }
+
+    fn start_bruteforcing(rc: Arc<RwLock<Self>>, range: Range<usize>) {
+        const UPDATE_ITER_RATE: u64 = 10_000;
+
+        println!(
+            "THREAD {:?} spawned! Searching range {:?}",
+            thread::current().id(),
+            range
+        );
+
+        let mut buffer = rc.read().unwrap().ctx.create_buffer();
+        let mut thread_iter = 1u64;
+
+        // Going through the indexes in reverse, it seems like the encryption key is at the end of the binary.
+        for offset in range.rev() {
+            // Take the next 32 bytes, try to use them as the key.
+            let (result, key) = {
+                let work = rc.read().unwrap();
+                let possible_key = work.binary_data[offset..(offset + 32)]
+                    .iter()
+                    .copied()
+                    .collect::<Vec<u8>>();
+                (
+                    work.ctx.try_decrypt(&possible_key, &mut buffer),
+                    possible_key,
+                )
+            };
+
+            if result {
+                println!("KEY FOUND: '{}'", hex::encode(key));
+                rc.write().unwrap().done.store(true, Ordering::Relaxed);
+                return;
+            }
+
+            thread_iter += 1;
+            if thread_iter >= UPDATE_ITER_RATE {
+                let work = rc.write().unwrap();
+                work.iterations.fetch_add(thread_iter, Ordering::Relaxed);
+                thread_iter -= UPDATE_ITER_RATE;
+                if work.done.load(Ordering::Relaxed) {
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn spawn_threads(
+        ctx: Arc<RwLock<Self>>,
+        thread_count: usize,
+    ) -> Vec<thread::JoinHandle<()>> {
+        assert!(thread_count > 0, "cannot be zero");
+
+        let mut thread_handles = vec![];
+        let chunk_size = ctx.read().unwrap().binary_size / thread_count;
+
+        for i in 0..thread_count {
+            let range_begin = i * chunk_size;
+            let range_end = range_begin + chunk_size;
+            let range = range_begin..range_end;
+
+            let ctx = ctx.clone();
+            thread_handles.push(thread::spawn(move || {
+                Self::start_bruteforcing(ctx, range);
+            }));
         }
 
-        if idx % 10_000 == 0 {
-            println!(
-                "CHECKED {} COMBINATIONS! ({:.2}% of the binary checked)",
-                idx,
-                (idx as f32) / (range_len as f32) * 100.0f32
-            );
-        }
+        thread_handles
     }
 }
 
@@ -51,49 +125,36 @@ fn main() {
     }
 
     let embedded = args[2] == "--embedded";
-    let (pck_file, pck_begin) = if embedded {
-        pck::PckFile::new_embedded(&args[1])
-    } else {
-        (pck::PckFile::new(&args[1]), 0usize)
-    };
+    let work_arc = WorkContext::new(
+        &args[1],
+        if embedded { &args[1] } else { &args[2] },
+        embedded,
+    );
 
-    let decrypt_details = Arc::new(RwLock::new(pck::DecryptContext::from(pck_file)));
+    let threads = WorkContext::spawn_threads(work_arc.clone(), THREAD_COUNT);
 
-    let binary_arc = Arc::new(RwLock::new(
-        if embedded {
-            std::fs::read(&args[1])
-        } else {
-            std::fs::read(&args[2])
+    let binary_size = work_arc.read().unwrap().binary_size as f32;
+
+    let begin = Instant::now();
+    loop {
+        thread::sleep(UPDATE_INTERVAL);
+
+        let work = work_arc.read().unwrap();
+        if work.done.load(Ordering::Relaxed) {
+            break;
         }
-        .expect("binary not found!"),
-    ));
 
-    let real_size = if embedded {
-        pck_begin
-    } else {
-        binary_arc.read().unwrap().len()
-    };
-    // Bit of a hack to make sure that we don't go out of bounds, this way no if statement is needed in the for loop.
-    binary_arc.write().unwrap().resize(real_size + 32, 0u8);
-
-    // Balance the work for all the threads.
-    let mut thread_handles = vec![];
-
-    let chunk_size = real_size / THREAD_COUNT;
-    for i in 0..THREAD_COUNT {
-        let range_begin = i * chunk_size;
-        let range_end = range_begin + chunk_size;
-        let range = range_begin..range_end;
-
-        let ctx = decrypt_details.clone();
-        let binary = binary_arc.clone();
-        thread_handles.push(thread::spawn(move || {
-            println!("THREAD {:?} spawned!", thread::current().id());
-            brute_force(ctx, binary, range);
-        }));
+        let iterations = work.iterations.load(Ordering::Relaxed);
+        println!(
+            "Searched {} iterations which is {:.2}% of the binary!",
+            iterations,
+            (iterations as f32) / binary_size * 100.0f32
+        )
     }
 
-    for j in thread_handles {
+    for j in threads {
         j.join().expect("?");
     }
+
+    println!("Program was run for: {:?}", Instant::now() - begin);
 }

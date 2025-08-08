@@ -13,7 +13,7 @@ impl PckFile {
     }
 
     /**
-     * @returns the PckFile stripped from the binary, and the index where the PCK begins in the binary.
+     * @returns the PckFile stripped from the binary, and returns the size of the binary (excluding the pck).
      */
     pub fn new_embedded(file_path: &str) -> (PckFile, usize) {
         let mut pck = Self::new(file_path);
