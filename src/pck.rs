@@ -4,7 +4,7 @@ pub struct PckFile {
 }
 
 impl PckFile {
-    pub fn new(file_path: &str) -> PckFile {
+    pub fn new(file_path: &str) -> Self {
         let file = std::fs::read(file_path).expect("?");
         PckFile {
             bytes: file,
@@ -72,13 +72,13 @@ impl PckFile {
 pub struct DecryptContext {
     encrypted_data: Vec<u8>,
     real_length: usize, // encrypted data is 16 aligned
-    data_copy: Vec<u8>, // using this to run the cypher on, without modifying the original.
+    // data_copy: Vec<u8>, // using this to run the cypher on, without modifying the original.
     data_md5: [u8; 16],
     iv: [u8; 16],
 }
 
 impl DecryptContext {
-    pub fn from(mut pck: PckFile) -> DecryptContext {
+    pub fn from(mut pck: PckFile) -> Self {
         pck.read_u32(); // magic
         pck.read_u32(); // version
         pck.read_u32(); // major
@@ -108,29 +108,32 @@ impl DecryptContext {
         pck.read_buffer(&mut data, false);
 
         DecryptContext {
-            encrypted_data: data.clone(),
+            encrypted_data: data,
             real_length: length as usize,
             data_md5: md5hash,
-            data_copy: data,
             iv: iv,
         }
     }
 
+    pub fn create_buffer(&self) -> Vec<u8> {
+        self.encrypted_data.clone()
+    }
+
     /**
-     * @brief returns `true` if encryption was successful.
+     * @brief returns `true` if encryption was successful. Buffer is used to allow unmutable use of self, each thread should have its own buffer.
      */
-    pub fn try_decrypt(&mut self, key: &[u8]) -> bool {
+    pub fn try_decrypt(&self, key: &[u8], buffer: &mut Vec<u8>) -> bool {
         use aes::cipher::{AsyncStreamCipher, KeyIvInit};
         assert_eq!(key.len(), 32, "invalid key length");
 
         // decrypt
         type Aes256CfbDec = cfb_mode::Decryptor<aes::Aes256>;
         Aes256CfbDec::new(key.into(), &self.iv.into())
-            .decrypt_b2b(&self.encrypted_data, &mut self.data_copy)
+            .decrypt_b2b(&self.encrypted_data, buffer)
             .expect("?");
 
         //
-        let hash = md5::compute(&self.data_copy[0..self.real_length]);
+        let hash = md5::compute(&buffer[0..self.real_length]);
 
         &hash.0 == &self.data_md5
     }
