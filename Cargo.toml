@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 aes = "0.8.4"
 cfb-mode = "0.8.2"
+clap = { version = "4.5.43", features = ["derive"] }
 hex = "0.4.3"
 md5 = "0.8.0"

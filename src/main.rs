@@ -1,12 +1,14 @@
+mod args;
+mod pck;
+
+use args::Args;
+use clap::Parser;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-mod pck;
-
-const THREAD_COUNT: usize = 4;
 const UPDATE_INTERVAL: Duration = Duration::from_millis(500);
 
 struct WorkContext {
@@ -117,21 +119,19 @@ impl WorkContext {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        println!("usage: <pck-filepath> <binary-filepath>");
-        println!("usage: <binary-filepath> --embedded");
-        return;
-    }
+    let args = Args::parse();
+    assert_ne!(args.jobs, 0, "--jobs has to be greater than '0'!");
+    
+    let work_arc = match args.cmd {
+        args::CommandType::Pck(cmd) => {
+            WorkContext::new(&cmd.pck, &cmd.bin, false)
+        }
+        args::CommandType::Embedded(cmd) => {
+            WorkContext::new(&cmd.bin, &cmd.bin, true)
+        }
+    };
 
-    let embedded = args[2] == "--embedded";
-    let work_arc = WorkContext::new(
-        &args[1],
-        if embedded { &args[1] } else { &args[2] },
-        embedded,
-    );
-
-    let threads = WorkContext::spawn_threads(work_arc.clone(), THREAD_COUNT);
+    let threads = WorkContext::spawn_threads(work_arc.clone(), args.jobs.into());
 
     let binary_size = work_arc.read().unwrap().binary_size as f32;
 
