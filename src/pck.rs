@@ -33,7 +33,7 @@ impl PckFile {
             assert_eq!(magic, 0x43504447, "not magic!");
             pck.current_index -= 4;
         }
-        
+
         let begin_pck = pck.current_index;
         pck.current_index = 0;
 

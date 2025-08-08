@@ -121,14 +121,10 @@ impl WorkContext {
 fn main() {
     let args = Args::parse();
     assert_ne!(args.jobs, 0, "--jobs has to be greater than '0'!");
-    
+
     let work_arc = match args.cmd {
-        args::CommandType::Pck(cmd) => {
-            WorkContext::new(&cmd.pck, &cmd.bin, false)
-        }
-        args::CommandType::Embedded(cmd) => {
-            WorkContext::new(&cmd.bin, &cmd.bin, true)
-        }
+        args::CommandType::Pck(cmd) => WorkContext::new(&cmd.pck, &cmd.bin, false),
+        args::CommandType::Embedded(cmd) => WorkContext::new(&cmd.bin, &cmd.bin, true),
     };
 
     let threads = WorkContext::spawn_threads(work_arc.clone(), args.jobs.into());

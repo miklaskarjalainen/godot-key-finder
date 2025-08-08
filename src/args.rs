@@ -1,4 +1,4 @@
-use clap::{Subcommand, Parser};
+use clap::{Parser, Subcommand};
 
 /// Simple program to brute-force the encryption key from a godot game,
 /// by trying to use every possible 32-byte sequence in a binary to decrypt the contents.
@@ -29,7 +29,7 @@ pub struct CommandPck {
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct CommandEmbedded {
-    /// Path to the binary file, with embedded & encrypted 'pck'. 
+    /// Path to the binary file, with embedded & encrypted 'pck'.
     #[arg(short, long)]
     pub bin: String,
 }
